@@ -5,7 +5,8 @@ import re
 import git
 
 req_re = re.compile(
-    r"^\|\s*\*\*([0-9.]+)\*\* \|\s*(\[[^\]]*\])?\s*(.*)\s*\|\s*(.*)\s*\|\s*(.*)\s*\|\s*(.*)\s*\|"
+    r"^\|\s*\*\*([0-9.]+)\*\* \|\s*(\[[^\]]*\])?\s*([^|]*)\s*\|\s*([^|]*)\s*\|\s*([^|]*)\s*\|\s*([^|]*)\s*\|"
+    #            ID                   Tag           Desc          L1              L2              L3 
 )
 
 
@@ -30,8 +31,10 @@ def parse_file(fname):
             m = req_re.match(line)
             if m:
                 id, tag, req, l1, l2, l3 = m.groups()
+                if "([C" in req:
+                    req = req[:req.index("([C")]
                 l = level(l1, l2, l3)
-                reqs.append((id, tag, req, l, (fname, lineno)))
+                reqs.append((id, tag, req.strip(), l, (fname, lineno)))
     return reqs
 
 
@@ -55,6 +58,21 @@ class AsvsRepo:
                 line_no += 1
         return line_to_commit
 
+def tag_emoji(tag):
+    if tag is None:
+        return "⚪️"
+    if "ADDED" in tag:
+        return "➕";
+    if "MOVED" in tag:
+        return "🔀";
+    if "SPLIT" in tag:
+        return "✂️";
+    if "REMOVED" in tag or "DELETED" in tag:
+        return "❌";
+    if "LEVEL" in tag:
+        return "🎚"
+    return "🖊️";
+
 
 if __name__ == "__main__":
     asvs_dir = sys.argv[1]
@@ -62,6 +80,10 @@ if __name__ == "__main__":
 
     req_files = repo.requirement_file_paths
     for req_file in req_files:
-        print(req_file)
         blame = repo.blame(req_file)
-        print(parse_file(req_file))
+        reqs = parse_file(req_file)
+        for r in reqs:
+            (id, tag, req, lev, pos) = r
+            emoji = tag_emoji(tag)
+            lev = lev or ""
+            print(f"|{id}|{lev}|<span title='{tag}'>{emoji}</span>|{req}|")
