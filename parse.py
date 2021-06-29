@@ -3,11 +3,17 @@ from glob import glob
 import os.path
 import re
 import git
+from github import Github
+import os
+from collections import defaultdict
+
 
 req_re = re.compile(
     r"^\|\s*\*\*([0-9.]+)\*\* \|\s*(\[[^\]]*\])?\s*([^|]*)\s*\|\s*([^|]*)\s*\|\s*([^|]*)\s*\|\s*([^|]*)\s*\|"
     #            ID                   Tag           Desc          L1              L2              L3 
 )
+
+ref_re = re.compile("([1-9]\d*\.[1-9]\d*\.[1-9]\d*)")
 
 
 def enumerate1(seq):
@@ -24,18 +30,47 @@ def level(l1, l2, l3):
     return None
 
 
-def parse_file(fname):
-    reqs = []
-    with open(fname) as fp:
-        for lineno, line in enumerate1(fp):
-            m = req_re.match(line)
-            if m:
-                id, tag, req, l1, l2, l3 = m.groups()
-                if "([C" in req:
-                    req = req[:req.index("([C")]
-                l = level(l1, l2, l3)
-                reqs.append((id, tag, req.strip(), l, (fname, lineno)))
-    return reqs
+def escape(s):
+    return s.replace("'", "&apos;");
+
+
+class Requirement:
+    def __init__(self, id, tag, description, level, position, commit, issues):
+        self.id = id
+        self.tag = tag
+        self.description = description
+        self.level = level or ""
+        self.position = position
+        self.commit = commit
+        self.issues = issues
+
+    @property
+    def emoji(self):
+        tag = self.tag
+        if tag is None:
+            return "⚪️"
+        if "ADDED" in tag:
+            return "➕";
+        if "MOVED" in tag:
+            return "🔀";
+        if "SPLIT" in tag:
+            return "✂️";
+        if "REMOVED" in tag or "DELETED" in tag:
+            return "❌";
+        if "LEVEL" in tag:
+            return "🎚"
+        return "🖊️";
+    
+    @property
+    def title(self):
+        return self.tag or ""
+
+    @property
+    def formatted_issues(self):
+        texts = []
+        for i in self.issues:
+            texts.append(f"<a href='{i.html_url}'>#{i.number}</a>")
+        return " ".join(texts)
 
 
 class AsvsRepo:
@@ -45,7 +80,25 @@ class AsvsRepo:
 
     @property
     def requirement_file_paths(self):
-        return glob(os.path.join(self.path, "4.0/en/0x??-V*"))
+        files = glob(os.path.join(self.path, "4.0/en/0x??-V*"))
+        return sorted(files)
+
+    def parse_file(self, fname):
+        reqs = []
+        blames = self.blame(fname)
+        issues = self.get_issues()
+        with open(fname) as fp:
+            for lineno, line in enumerate1(fp):
+                m = req_re.match(line)
+                if m:
+                    id, tag, req, l1, l2, l3 = m.groups()
+                    if "([C" in req:
+                        req = req[:req.index("([C")]
+                    l = level(l1, l2, l3)
+                    commit = blames[lineno]
+                    req = Requirement(id, tag, req.strip(), l, (fname, lineno), commit, issues.get(id, []))
+                    reqs.append(req)
+        return reqs
 
     def blame(self, req_file):
         blame = self.repo.blame("HEAD", req_file)
@@ -57,33 +110,27 @@ class AsvsRepo:
                 line_to_commit[line_no] = commit
                 line_no += 1
         return line_to_commit
-
-def tag_emoji(tag):
-    if tag is None:
-        return "⚪️"
-    if "ADDED" in tag:
-        return "➕";
-    if "MOVED" in tag:
-        return "🔀";
-    if "SPLIT" in tag:
-        return "✂️";
-    if "REMOVED" in tag or "DELETED" in tag:
-        return "❌";
-    if "LEVEL" in tag:
-        return "🎚"
-    return "🖊️";
+    
+    def get_issues(self):
+        issue_dict = defaultdict(list)
+        g = Github(os.environ["github_access_token"])
+        repo = g.get_repo("OWASP/ASVS")
+        issues = repo.get_issues() #filter="all", state="all")
+        for issue in issues:
+            m = ref_re.findall(issue.title)
+            if m:
+                for req_id in m:
+                    issue_dict[req_id].append(issue)
+        return issue_dict
 
 
 if __name__ == "__main__":
     asvs_dir = sys.argv[1]
     repo = AsvsRepo(asvs_dir)
+    issues = repo.get_issues()
 
     req_files = repo.requirement_file_paths
     for req_file in req_files:
-        blame = repo.blame(req_file)
-        reqs = parse_file(req_file)
+        reqs = repo.parse_file(req_file)
         for r in reqs:
-            (id, tag, req, lev, pos) = r
-            emoji = tag_emoji(tag)
-            lev = lev or ""
-            print(f"|{id}|{lev}|<span title='{tag}'>{emoji}</span>|{req}|")
+            print(f"|{r.id}|{r.level}|{r.formatted_issues}|<span title='{r.title}'>{r.emoji}</span>|{r.description}|")
