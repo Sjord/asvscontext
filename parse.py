@@ -6,6 +6,7 @@ import git
 from github import Github
 import os
 from collections import defaultdict
+from get_merge import get_ancestry_path_first_parent_match
 
 
 req_re = re.compile(
@@ -88,6 +89,12 @@ class AsvsRepo:
 
     def commit_msg_issues(self, commit):
         matches = issue_re.findall(commit.message)
+
+        merge_commit = get_ancestry_path_first_parent_match(self.repo, commit.hexsha, "master")
+        if merge_commit:
+            merge_commit = self.repo.commit(merge_commit)
+            matches += issue_re.findall(merge_commit.message)
+
         numbers = set([number for (_, _, number) in matches])
         return [self.github.get_issue(int(n)) for n in numbers]
 
