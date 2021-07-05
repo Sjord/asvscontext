@@ -15,6 +15,8 @@ req_re = re.compile(
 
 ref_re = re.compile("([1-9]\d*\.[1-9]\d*\.[1-9]\d*)")
 
+issue_re = re.compile("((/issues/|issue-|#)(\d+))")
+
 
 def enumerate1(seq):
     return ((i + 1, item) for i, item in enumerate(seq))
@@ -77,11 +79,17 @@ class AsvsRepo:
     def __init__(self, path):
         self.path = path
         self.repo = git.Repo(path)
+        self.github = Github(os.environ["github_access_token"]).get_repo("OWASP/ASVS")
 
     @property
     def requirement_file_paths(self):
         files = glob(os.path.join(self.path, "4.0/en/0x??-V*"))
         return sorted(files)
+
+    def commit_msg_issues(self, commit):
+        matches = issue_re.findall(commit.message)
+        numbers = set([number for (_, _, number) in matches])
+        return [self.github.get_issue(int(n)) for n in numbers]
 
     def parse_file(self, fname):
         reqs = []
@@ -96,7 +104,7 @@ class AsvsRepo:
                         req = req[:req.index("([C")]
                     l = level(l1, l2, l3)
                     commit = blames[lineno]
-                    req = Requirement(id, tag, req.strip(), l, (fname, lineno), commit, issues.get(id, []))
+                    req = Requirement(id, tag, req.strip(), l, (fname, lineno), commit, self.commit_msg_issues(commit) + issues.get(id, []))
                     reqs.append(req)
         return reqs
 
@@ -127,7 +135,9 @@ class AsvsRepo:
 if __name__ == "__main__":
     asvs_dir = sys.argv[1]
     repo = AsvsRepo(asvs_dir)
-    issues = repo.get_issues()
+
+    print("|ID|L|I|M|Desc|")
+    print("--|--|--|--|--")
 
     req_files = repo.requirement_file_paths
     for req_file in req_files:
