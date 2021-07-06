@@ -6,7 +6,7 @@ import git
 from github import Github
 import os
 from collections import defaultdict
-from get_merge import get_ancestry_path_first_parent_match
+from get_merge import get_ancestry_path_first_parent_match, get_first_merge_into
 
 
 req_re = re.compile(
@@ -16,7 +16,7 @@ req_re = re.compile(
 
 ref_re = re.compile("([1-9]\d*\.[1-9]\d*\.[1-9]\d*)")
 
-issue_re = re.compile("((/issues/|issue-|#)(\d+))")
+issue_re = re.compile("((/issues/|issue-|issue |issue|pr|#)(\d\d+))")
 
 
 def enumerate1(seq):
@@ -34,17 +34,18 @@ def level(l1, l2, l3):
 
 
 def escape(s):
-    return s.replace("'", "&apos;");
+    return (s.replace("'", "&apos;")
+        .replace("|", "&#x7C;"))
 
 
 class Requirement:
-    def __init__(self, id, tag, description, level, position, commit, issues):
+    def __init__(self, id, tag, description, level, position, commits, issues):
         self.id = id
         self.tag = tag
         self.description = description
         self.level = level or ""
         self.position = position
-        self.commit = commit
+        self.commits = commits
         self.issues = issues
 
     @property
@@ -71,8 +72,8 @@ class Requirement:
     @property
     def formatted_issues(self):
         texts = []
-        for i in self.issues:
-            texts.append(f"<a href='{i.html_url}'>#{i.number}</a>")
+        for i in sorted(self.issues, key=lambda i: -i.number):
+            texts.append(f"<a href='{escape(i.html_url)}' title='{escape(i.title)}'>#{i.number}</a>")
         return " ".join(texts)
 
 
@@ -81,27 +82,23 @@ class AsvsRepo:
         self.path = path
         self.repo = git.Repo(path)
         self.github = Github(os.environ["github_access_token"]).get_repo("OWASP/ASVS")
+        self._issue_dict = None
 
     @property
     def requirement_file_paths(self):
         files = glob(os.path.join(self.path, "4.0/en/0x??-V*"))
         return sorted(files)
 
-    def commit_msg_issues(self, commit):
-        matches = issue_re.findall(commit.message)
-
-        merge_commit = get_ancestry_path_first_parent_match(self.repo, commit.hexsha, "master")
-        if merge_commit:
-            merge_commit = self.repo.commit(merge_commit)
-            matches += issue_re.findall(merge_commit.message)
+    def commit_msg_issues(self, commits):
+        matches = []
+        for commit in commits:
+            matches += issue_re.findall(commit.message)
 
         numbers = set([number for (_, _, number) in matches])
         return [self.github.get_issue(int(n)) for n in numbers]
 
     def parse_file(self, fname):
         reqs = []
-        blames = self.blame(fname)
-        issues = self.get_issues()
         with open(fname) as fp:
             for lineno, line in enumerate1(fp):
                 m = req_re.match(line)
@@ -110,23 +107,31 @@ class AsvsRepo:
                     if "([C" in req:
                         req = req[:req.index("([C")]
                     l = level(l1, l2, l3)
-                    commit = blames[lineno]
-                    req = Requirement(id, tag, req.strip(), l, (fname, lineno), commit, self.commit_msg_issues(commit) + issues.get(id, []))
+                    commits = self.relevant_commits(fname, id)
+                    req = Requirement(id, tag, req.strip(), l, (fname, lineno), commits, self.commit_msg_issues(commits) + self.issues.get(id, []))
                     reqs.append(req)
         return reqs
 
-    def blame(self, req_file):
-        blame = self.repo.blame("HEAD", req_file)
-        line_no = 1
-        line_to_commit = {}
-        for commit, lines in blame:
-            new_line_no = line_no + len(lines)
-            while line_no < new_line_no:
-                line_to_commit[line_no] = commit
-                line_no += 1
-        return line_to_commit
+    def get_merge_commit(self, sha):
+        a = get_ancestry_path_first_parent_match(self.repo, sha, "master")
+        b = get_first_merge_into(self.repo, sha, "master")
+        if a == b:
+            return a
+        return None
+
+    def relevant_commits(self, fname, id):
+        log = self.repo.git.log("-G", re.escape(f"**{id}**"), "v4.0.1..HEAD", "--pretty=format:%H", "--", fname)
+        shas = [sha for sha in log.split("\n") if sha]
+        merges = [self.get_merge_commit(sha) for sha in shas]
+        merges = [m for m in merges if m]
+        return [self.repo.commit(c) for c in shas + merges]
     
-    def get_issues(self):
+    @property
+    def issues(self):
+        return {}
+        if self._issue_dict:
+            return self._issue_dict
+
         issue_dict = defaultdict(list)
         g = Github(os.environ["github_access_token"])
         repo = g.get_repo("OWASP/ASVS")
@@ -136,6 +141,8 @@ class AsvsRepo:
             if m:
                 for req_id in m:
                     issue_dict[req_id].append(issue)
+
+        self._issue_dict = issue_dict
         return issue_dict
 
 
@@ -148,6 +155,10 @@ if __name__ == "__main__":
 
     req_files = repo.requirement_file_paths
     for req_file in req_files:
+        print(req_file, file=sys.stderr)
         reqs = repo.parse_file(req_file)
         for r in reqs:
             print(f"|{r.id}|{r.level}|{r.formatted_issues}|<span title='{r.title}'>{r.emoji}</span>|{r.description}|")
+
+    print()
+    print("Generated by [asvscontext](https://github.com/Sjord/asvscontext)")
