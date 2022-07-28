@@ -71,8 +71,11 @@ class Requirement:
 
     @property
     def formatted_issues(self):
+        meh_issues = [1119]
+        issues = [i for i in self.issues if i.number not in meh_issues]
+
         texts = []
-        for i in sorted(self.issues, key=lambda i: -i.number):
+        for i in sorted(issues, key=lambda i: -i.number):
             texts.append(f"<a href='{escape(i.html_url)}' title='{escape(i.title)}'>#{i.number}</a>")
         return " ".join(texts)
 
@@ -86,7 +89,7 @@ class AsvsRepo:
 
     @property
     def requirement_file_paths(self):
-        files = glob(os.path.join(self.path, "4.0/en/0x??-V*"))
+        files = glob(os.path.join(self.path, "5.0/en/0x??-V*"))
         return sorted(files)
 
     def commit_msg_issues(self, commits):
@@ -128,14 +131,13 @@ class AsvsRepo:
     
     @property
     def issues(self):
-        return {}
         if self._issue_dict:
             return self._issue_dict
 
         issue_dict = defaultdict(list)
         g = Github(os.environ["github_access_token"])
         repo = g.get_repo("OWASP/ASVS")
-        issues = repo.get_issues() #filter="all", state="all")
+        issues = repo.get_issues(state="all")
         for issue in issues:
             m = ref_re.findall(issue.title)
             if m:
@@ -145,6 +147,30 @@ class AsvsRepo:
         self._issue_dict = issue_dict
         return issue_dict
 
+def find_req(reqs, id):
+    matches = [r for r in reqs if r.id == id]
+    (single,) = matches
+    return single
+
+def merge_issues(a, b):
+    issues = {}
+    for ib in b:
+        issues[ib.id] = ib
+    for ia in a:
+        issues[ia.id] = ia
+    return sorted(issues.values(), key=lambda i: -i.number)
+
+def merge_reqs(a, b):
+    result = []
+    for reqa in a:
+        try:
+            reqb = find_req(b, reqa.id)
+            result.append(Requirement(
+                reqa.id, reqa.tag or reqb.tag, reqa.description or reqb.description, reqa.level or reqb.level, reqa.position or reqb.position, reqa.commits + reqb.commits, merge_issues(reqa.issues, reqb.issues)))
+        except ValueError:
+            result.append(reqa)
+
+    return result
 
 if __name__ == "__main__":
     asvs_dir = sys.argv[1]
@@ -156,7 +182,12 @@ if __name__ == "__main__":
     req_files = repo.requirement_file_paths
     for req_file in req_files:
         print(req_file, file=sys.stderr)
-        reqs = repo.parse_file(req_file)
+
+        reqs5 = repo.parse_file(req_file)
+        req4_file = req_file.replace("/5.0/", "/4.0/")
+        reqs4 = repo.parse_file(req4_file)
+        reqs = merge_reqs(reqs5, reqs4)
+
         for r in reqs:
             print(f"|{r.id}|{r.level}|{r.formatted_issues}|<span title='{r.title}'>{r.emoji}</span>|{r.description}|")
 
