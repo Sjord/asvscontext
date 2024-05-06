@@ -89,7 +89,7 @@ class AsvsRepo:
 
     @property
     def requirement_file_paths(self):
-        files = glob(os.path.join(self.path, "5.0/en/0x??-V*"))
+        files = glob(os.path.join(self.path, "4.0/en/0x??-V*"))
         return sorted(files)
 
     def commit_msg_issues(self, commits):
@@ -192,13 +192,7 @@ if __name__ == "__main__":
     for req_file in req_files:
         print(req_file, file=sys.stderr)
 
-        reqs5 = repo.parse_file(req_file)
-        req4_file = req_file.replace("/5.0/", "/4.0/")
-        try:
-            reqs4 = repo.parse_file(req4_file)
-        except FileNotFoundError:
-            reqs4 = []
-        reqs = merge_reqs(reqs5, reqs4)
+        reqs = repo.parse_file(req_file)
 
         for r in reqs:
             print(f"|{r.id}|{r.level}|{r.formatted_issues}|<span title='{r.title}'>{r.emoji}</span>|{r.description}|")
