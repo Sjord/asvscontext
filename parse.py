@@ -3,7 +3,7 @@ from glob import glob
 import os.path
 import re
 import git
-from github import Github
+from github import Github, GithubException
 import os
 from collections import defaultdict
 from get_merge import get_ancestry_path_first_parent_match, get_first_merge_into
@@ -14,9 +14,9 @@ req_re = re.compile(
     #            ID                   Tag           Desc          L1              L2              L3 
 )
 
-ref_re = re.compile("([1-9]\d*\.[1-9]\d*\.[1-9]\d*)")
+ref_re = re.compile(r"([1-9]\d*\.[1-9]\d*\.[1-9]\d*)")
 
-issue_re = re.compile("((/issues/|issue-|issue |issue|pr|#)(\d\d+))")
+issue_re = re.compile(r"((/issues/|issue-|issue |issue|pr|#)(\d\d+))")
 
 
 def enumerate1(seq):
@@ -98,7 +98,16 @@ class AsvsRepo:
             matches += issue_re.findall(commit.message)
 
         numbers = set([number for (_, _, number) in matches])
-        return [self.github.get_issue(int(n)) for n in numbers]
+        return self.get_issues(numbers)
+    
+    def get_issues(self, numbers):
+        issues = []
+        for n in numbers:
+            try:
+                issues.append(self.github.get_issue(int(n)))
+            except GithubException:
+                pass
+        return issues
 
     def parse_file(self, fname):
         reqs = []
@@ -185,7 +194,10 @@ if __name__ == "__main__":
 
         reqs5 = repo.parse_file(req_file)
         req4_file = req_file.replace("/5.0/", "/4.0/")
-        reqs4 = repo.parse_file(req4_file)
+        try:
+            reqs4 = repo.parse_file(req4_file)
+        except FileNotFoundError:
+            reqs4 = []
         reqs = merge_reqs(reqs5, reqs4)
 
         for r in reqs:
